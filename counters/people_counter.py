@@ -1,171 +1,221 @@
+# import cv2
+# import numpy as np
+# import math
+# from collections import defaultdict, Counter
+# from .base_counter import BaseCounter
+# from ultralytics import YOLO
+# from deep_sort_realtime.deepsort_tracker import DeepSort
+# # --- Helper Functions for Line Intersection Logic ---
+# def on_segment(p, q, r):
+#     """Given three collinear points p, q, r, check if point q lies on line segment 'pr'."""
+#     return (q[0] <= max(p[0], r[0]) and q[0] >= min(p[0], r[0]) and
+#             q[1] <= max(p[1], r[1]) and q[1] >= min(p[1], r[1]))
+
+# def orientation(p, q, r):
+#     """Find orientation of ordered triplet (p, q, r)."""
+#     val = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1])
+#     if val == 0: return 0  # Collinear
+#     return 1 if val > 0 else 2  # Clockwise or Counterclockwise
+
+# def intersects(seg1_p1, seg1_p2, seg2_p1, seg2_p2):
+#     """Return true if line segment 'seg1' and 'seg2' intersect."""
+#     o1 = orientation(seg1_p1, seg1_p2, seg2_p1)
+#     o2 = orientation(seg1_p1, seg1_p2, seg2_p2)
+#     o3 = orientation(seg2_p1, seg2_p2, seg1_p1)
+#     o4 = orientation(seg2_p1, seg2_p2, seg1_p2)
+
+#     if o1 != o2 and o3 != o4:
+#         return True
+#     if o1 == 0 and on_segment(seg1_p1, seg2_p1, seg1_p2): return True
+#     if o2 == 0 and on_segment(seg1_p1, seg2_p2, seg1_p2): return True
+#     if o3 == 0 and on_segment(seg2_p1, seg1_p1, seg2_p2): return True
+#     if o4 == 0 and on_segment(seg2_p1, seg1_p2, seg2_p2): return True
+#     return False
+
+# # --- Main Counter Class ---
+# class PeopleCounter:
+#     def __init__(self, config):
+#         self.config = config
+#         self.detector = YOLO(self.config.YOLO_WEIGHTS)
+#         self.tracker = DeepSort(max_age=self.config.DEEPSORT_MAX_AGE)
+        
+#         self.counts = Counter()
+#         self.counted_track_ids = set()
+#         self.track_history = defaultdict(list)
+
+#     def run(self, video_source):
+#         cap = cv2.VideoCapture(video_source)
+#         if not cap.isOpened():
+#             print(f"Error opening video: {video_source}")
+#             return
+
+#         polyline_np = np.array(self.config.COUNTING_POLYLINE, dtype=np.int32)
+
+#         while True:
+#             ret, frame = cap.read()
+#             if not ret: 
+#                 print("End of video stream.")
+#                 break
+
+#             # 1. Detection and Tracking
+#             results = self.detector(frame, conf=self.config.CONF_THRESH, verbose=False)
+#             detections_for_tracker = []
+#             for r in results:
+#                 for box in r.boxes:
+#                     cls_id, conf = int(box.cls[0]), float(box.conf[0])
+#                     label = self.detector.names.get(cls_id)
+#                     if label in self.config.TARGET_CLASSES:
+#                         x1, y1, x2, y2 = map(int, box.xyxy[0])
+#                         w, h = x2 - x1, y2 - y1
+#                         detections_for_tracker.append([[x1, y1, w, h], conf, label])
+            
+#             tracks = self.tracker.update_tracks(detections_for_tracker, frame=frame)
+
+#             # 2. Process Tracks and Check for Crossing
+#             for track in tracks:
+#                 if not track.is_confirmed(): continue
+
+#                 tid = int(track.track_id)
+#                 l, t, r, b = map(int, track.to_ltrb())
+                
+#                 current_point = ((l + r) // 2, b)
+#                 self.track_history[tid].append(current_point)
+                
+#                 if len(self.track_history[tid]) > 1:
+#                     previous_point = self.track_history[tid][-2]
+                    
+#                     for i in range(len(polyline_np) - 1):
+#                         line_seg_p1 = tuple(polyline_np[i])
+#                         line_seg_p2 = tuple(polyline_np[i+1])
+
+#                         if intersects(previous_point, current_point, line_seg_p1, line_seg_p2):
+#                             if tid not in self.counted_track_ids:
+#                                 self.counts["person"] += 1
+#                                 self.counted_track_ids.add(tid)
+#                             break 
+
+#                 # 3. Drawing Bounding Boxes and Track Info
+#                 # Draw GREEN bounding box
+#                 cv2.rectangle(frame, (l, t), (r, b), (0, 200, 0), 2)
+#                 # Draw WHITE text
+#                 cv2.putText(frame, f"person-{tid}", (l, t-10), self.config.FONT, 0.5, (255,255,255), 2)
+#                 # Draw YELLOW tracking dot
+#                 cv2.circle(frame, current_point, 4, (0, 255, 255), -1)
+
+#             # 4. Draw the BLACK Counting Line and Counter Text
+#             # This is the only line drawn for counting.
+#             cv2.polylines(frame, [polyline_np], isClosed=False, color=self.config.LINE_COLOR, thickness=self.config.LINE_THICKNESS)
+            
+#             total_count = self.counts["person"]
+#             count_text = f"person: {total_count}"
+            
+#             # Draw YELLOW counter text
+#             cv2.putText(frame, count_text, (20, 50), self.config.FONT, 1.5, (0, 255, 255), 3)
+
+#             # 5. Display the Frame
+#             cv2.imshow("People Counter", frame)
+#             if cv2.waitKey(1) & 0xFF == ord("q"):
+#                 break
+
+#         cap.release()
+#         cv2.destroyAllWindows()
+
+# people_counter.py
+
 import cv2
 import numpy as np
-import math
 from collections import defaultdict, Counter
-from .base_counter import BaseCounter
-from ultralytics import YOLO
-from deep_sort_realtime.deepsort_tracker import DeepSort
+from .base_counter import BaseCounter # Correctly imports the base class
 
-class PeopleCounter(BaseCounter):
-    def __init__(self, config):
-        # Initialize YOLO detector and DeepSort tracker
-        self.detector = YOLO(config.YOLO_WEIGHTS)
-        self.tracker = DeepSort(max_age=config.DEEPSORT_MAX_AGE)
-        super().__init__(config, self.detector, self.tracker)
+# --- Helper Functions for Line Intersection Logic ---
+def on_segment(p, q, r):
+    return (q[0] <= max(p[0], r[0]) and q[0] >= min(p[0], r[0]) and
+            q[1] <= max(p[1], r[1]) and q[1] >= min(p[1], r[1]))
 
-        # Additional tracking state
-        self.inband_counts = defaultdict(int)
-        self.track_frame_counts = defaultdict(int)
-        self.track_label_history = defaultdict(Counter)
-        self.counted_events = []
-        self.counted_signatures = []
+def orientation(p, q, r):
+    val = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1])
+    if val == 0: return 0
+    return 1 if val > 0 else 2
 
-    def run(self, video_source):
-        cap = cv2.VideoCapture(video_source)
-        if not cap.isOpened():
-            print(f"Error opening video: {video_source}")
-            return
+def intersects(seg1_p1, seg1_p2, seg2_p1, seg2_p2):
+    o1 = orientation(seg1_p1, seg1_p2, seg2_p1)
+    o2 = orientation(seg1_p1, seg1_p2, seg2_p2)
+    o3 = orientation(seg2_p1, seg2_p2, seg1_p1)
+    o4 = orientation(seg2_p1, seg2_p2, seg1_p2)
+    if o1 != o2 and o3 != o4: return True
+    if o1 == 0 and on_segment(seg1_p1, seg2_p1, seg1_p2): return True
+    if o2 == 0 and on_segment(seg1_p1, seg2_p2, seg1_p2): return True
+    if o3 == 0 and on_segment(seg2_p1, seg1_p1, seg2_p2): return True
+    if o4 == 0 and on_segment(seg2_p1, seg1_p2, seg2_p2): return True
+    return False
 
-        frame_idx = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frame_idx += 1
-            fh, fw = frame.shape[:2]
+# --- Main Counter Class ---
+class PeopleCounter(BaseCounter): # <-- CORRECTLY INHERITS FROM BaseCounter
+    def __init__(self, config, detector, tracker):
+        # Initialize the parent BaseCounter class
+        super().__init__(config, detector, tracker)
+        # Add specific history for this counter
+        self.track_history = defaultdict(list)
+        self.polyline_np = np.array(self.config.COUNTING_POLYLINE, dtype=np.int32)
 
-            # --- Compute counting band ---
-            center_x = fw // 2
-            center_y = self.config.LINE_CENTER_Y
-            angle_rad = math.radians(self.config.LINE_ANGLE_DEG_ANTICLOCKWISE)
-            line_length = int(max(fw, fh) * 1.6)
-            dx = math.cos(angle_rad) * (line_length / 2.0)
-            dy = math.sin(angle_rad) * (line_length / 2.0)
-            x1_line = int(center_x - dx); y1_line = int(center_y - dy)
-            x2_line = int(center_x + dx); y2_line = int(center_y + dy)
+    def process_frame(self, frame):
+        """
+        This method overrides the one in BaseCounter.
+        It contains the main detection, tracking, and counting logic.
+        """
+        # 1. Detection and Tracking
+        results = self.detector(frame, conf=self.config.CONF_THRESH, verbose=False)
+        detections_for_tracker = []
+        for r in results:
+            for box in r.boxes:
+                cls_id, conf = int(box.cls[0]), float(box.conf[0])
+                if self.detector.names.get(cls_id) in self.config.TARGET_CLASSES:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    w, h = x2 - x1, y2 - y1
+                    detections_for_tracker.append([[x1, y1, w, h], conf, "person"])
+        
+        tracks = self.tracker.update_tracks(detections_for_tracker, frame=frame)
 
-            # Normal vector for band
-            lx = x2_line - x1_line; ly = y2_line - y1_line
-            line_len = max(math.hypot(lx, ly), 1.0)
-            nx = -ly / line_len; ny = lx / line_len
-            off_x = int(nx * self.config.BAND_HALF_WIDTH_PX)
-            off_y = int(ny * self.config.BAND_HALF_WIDTH_PX)
+        # 2. Process Tracks and Check for Crossing
+        for track in tracks:
+            if not track.is_confirmed(): continue
 
-            band_pts = np.array([
-                [x1_line - off_x, y1_line - off_y],
-                [x2_line - off_x, y2_line - off_y],
-                [x2_line + off_x, y2_line + off_y],
-                [x1_line + off_x, y1_line + off_y],
-            ], dtype=np.int32)
+            tid = int(track.track_id)
+            l, t, r, b = map(int, track.to_ltrb())
+            current_point = ((l + r) // 2, b)
+            self.track_history[tid].append(current_point)
+            
+            if len(self.track_history[tid]) > 1:
+                previous_point = self.track_history[tid][-2]
+                for i in range(len(self.polyline_np) - 1):
+                    line_seg_p1 = tuple(self.polyline_np[i])
+                    line_seg_p2 = tuple(self.polyline_np[i+1])
+                    if intersects(previous_point, current_point, line_seg_p1, line_seg_p2):
+                        if tid not in self.counted_ids:
+                            self.counts["person"] += 1
+                            self.counted_ids.add(tid)
+                        break
+        return tracks # Return tracks to be used by draw_overlay
 
-            # Band mask
-            band_mask = np.zeros((fh, fw), dtype=np.uint8)
-            cv2.fillPoly(band_mask, [band_pts], 255)
+    def draw_overlay(self, frame, tracks):
+        """
+        This method overrides the one in BaseCounter.
+        It draws the black line, bounding boxes, and counter text.
+        """
+        # 1. Draw the BLACK Counting Line
+        cv2.polylines(frame, [self.polyline_np], isClosed=False, color=self.config.LINE_COLOR, thickness=self.config.LINE_THICKNESS)
 
-            # --- Detection ---
-            results = self.detector(frame, conf=self.config.CONF_THRESH, verbose=False)
-            all_boxes, all_scores, all_labels = [], [], []
-            for r in results:
-                for box in r.boxes:
-                    cls_id = int(box.cls[0])
-                    label = self.detector.names.get(cls_id, None)
-                    if label not in self.config.TARGET_CLASSES:
-                        continue
-                    x1, y1, x2, y2 = map(float, box.xyxy[0])
-                    conf = float(box.conf[0])
-                    all_boxes.append([x1, y1, x2, y2])
-                    all_scores.append(conf)
-                    all_labels.append(label)
+        # 2. Draw Bounding Boxes and Track Info for current tracks
+        for track in tracks:
+             if not track.is_confirmed(): continue
+             tid = int(track.track_id)
+             l, t, r, b = map(int, track.to_ltrb())
+             cv2.rectangle(frame, (l, t), (r, b), (0, 200, 0), 2)
+             cv2.putText(frame, f"person-{tid}", (l, t-10), self.config.FONT, 0.5, (255,255,255), 2)
 
-            # Prepare for tracker ([x, y, w, h])
-            detections_for_tracker = []
-            if len(all_boxes) > 0:
-                boxes_np = np.array(all_boxes, dtype=np.float32)
-                scores_np = np.array(all_scores, dtype=np.float32)
-                labels_np = np.array(all_labels, dtype=object)
-                for i in range(len(boxes_np)):
-                    x1, y1, x2, y2 = boxes_np[i]
-                    w_box = x2 - x1; h_box = y2 - y1
-                    detections_for_tracker.append([[int(x1), int(y1), int(w_box), int(h_box)],
-                                                   float(scores_np[i]), str(labels_np[i])])
-
-            # --- Tracking ---
-            tracks = self.tracker.update_tracks(detections_for_tracker, frame=frame)
-
-            # --- Process tracks ---
-            for track in tracks:
-                if not track.is_confirmed():
-                    continue
-                tid = int(track.track_id)
-                l, t, r, b = map(int, track.to_ltrb())
-                cx, cy = (l + r)//2, (t + b)//2
-                px, py = cx, b
-
-                # Label voting
-                det_label = getattr(track, "det_class", None)
-                if isinstance(det_label, int):
-                    det_label = self.detector.names.get(det_label, None)
-                if det_label:
-                    self.track_label_history[tid][det_label] += 1
-                    label = self.track_label_history[tid].most_common(1)[0][0]
-                else:
-                    label = self.track_label_history[tid].most_common(1)[0][0] if self.track_label_history[tid] else None
-
-                # Update frames seen
-                self.track_frame_counts[tid] += 1
-                frames_seen = self.track_frame_counts[tid]
-
-                # In-band / overlap check
-                bottom_in = cv2.pointPolygonTest(band_pts, (px, py), False) >= 0
-                center_in = cv2.pointPolygonTest(band_pts, (cx, cy), False) >= 0
-
-                # bbox overlap
-                bbox_mask = np.zeros((fh, fw), dtype=np.uint8)
-                cv2.rectangle(bbox_mask, (l, t), (r, b), 255, -1)
-                overlap_pixels = int(cv2.countNonZero(cv2.bitwise_and(band_mask, bbox_mask)))
-                bbox_area = max(1, (r-l)*(b-t))
-                overlap_ratio = overlap_pixels / (bbox_area + 1e-8)
-                overlap_in = (overlap_pixels >= self.config.MIN_OVERLAP_PIX) or (overlap_ratio >= self.config.MIN_OVERLAP_RATIO)
-
-                curr_in_band = bottom_in or center_in or overlap_in
-                self.inband_counts[tid] = self.inband_counts.get(tid, 0) + (1 if curr_in_band else 0)
-
-                # Decide to count
-                should_count = (self.inband_counts[tid] >= self.config.MIN_FRAMES_IN_BAND
-                                and frames_seen >= self.config.MIN_FRAMES_BEFORE_COUNT
-                                and label not in self.counted_ids)
-
-                if should_count:
-                    self.counts[label] += 1
-                    self.counted_ids.add(tid)
-
-                # Draw bounding box + label
-                txt = f"{label}-{tid}" if label else f"id-{tid}"
-                cv2.rectangle(frame, (l, t), (r, b), (0, 200, 0), 2)
-                cv2.putText(frame, txt, (l, max(12, t-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 2)
-                cv2.circle(frame, (cx, cy), 3, (255, 0, 0), -1)
-                cv2.circle(frame, (px, py), 3, (0, 255, 255), -1)
-
-            # --- Draw counting band + overlay ---
-            overlay = frame.copy()
-            cv2.fillPoly(overlay, [band_pts], (0,0,128))
-            cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
-            p1a = (x1_line - off_x, y1_line - off_y); p2a = (x2_line - off_x, y2_line - off_y)
-            p1b = (x1_line + off_x, y1_line + off_y); p2b = (x2_line + off_x, y2_line + off_y)
-            cv2.line(frame, p1a, p2a, (0,0,255), 2)
-            cv2.line(frame, p1b, p2b, (0,0,255), 2)
-            cv2.line(frame, (x1_line, y1_line), (x2_line, y2_line), (0,0,180), 1)
-
-            # Draw counts
-            y_offset = 30
-            for cls, c in self.counts.items():
-                cv2.putText(frame, f"{cls}: {c}", (10, y_offset),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-                y_offset += 30
-
-            cv2.imshow("People Counter", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-
-        cap.release()
-        cv2.destroyAllWindows()
+        # 3. Draw Counter Text
+        total_count = self.counts["person"]
+        count_text = f"person: {total_count}"
+        cv2.putText(frame, count_text, (20, 50), self.config.FONT, 1.5, (0, 255, 255), 3)
+        
+        return frame

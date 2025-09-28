@@ -14,7 +14,7 @@ except Exception:
     _HAS_TORCHVISION_NMS = False
 
 # ---------- CONFIG ----------
-VIDEO_PATH = r"D:\pytorch_projects+tensorflow_projects_3.12\TL_FLAGSHIP\TL_MAIN_GATE\cctv footage videos\Students footages\MAIN GATE_INGATE PEDESTRAIN_20250902075201_20250902075801.mp4"
+VIDEO_PATH = r"video_2025-09-13_23-50-36.mp4"
 YOLO_WEIGHTS = "yolov8m.pt"   # change if necessary
 CONF_THRESH = 0.35
 IOU_NMS = 0.8

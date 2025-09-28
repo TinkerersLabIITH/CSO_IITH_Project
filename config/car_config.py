@@ -1,11 +1,16 @@
 # config/car_config.py
 import math
+import cv2
+
 class CarConfig:
 
     YOLO_WEIGHTS = "yolov8m.pt"
     TARGET_CLASSES = {"car", "bus", "truck"}
     CONF_THRESH = 0.4
     LINE_CENTER_Y = 500
+    LINE_COLOR = (0, 0, 0)       # This is BLACK for the counting line.
+    LINE_THICKNESS = 3
+    FONT = cv2.FONT_HERSHEY_SIMPLEX
     BAND_HALF_WIDTH_PX = 120
         # ---- CHANGE HERE: 30 degrees anticlockwise ----
     LINE_ANGLE_DEG_ANTICLOCKWISE = 20
@@ -23,4 +28,5 @@ class CarConfig:
     DUP_RADIUS_PX = 120            # radius to consider a counted event duplicate
     DUP_FRAME_WINDOW = 100         # frames window to consider duplicates
     DEEPSORT_MAX_AGE = 30
+    COUNTING_POLYLINE = [(81, 259), (998, 990)]
 config = CarConfig()
