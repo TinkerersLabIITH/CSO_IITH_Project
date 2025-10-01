@@ -1,8 +1,9 @@
+# one_way_position_based_counter_fixed.py
 import cv2
 import numpy as np
 import torch
 import math
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter, deque
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
@@ -14,38 +15,51 @@ except Exception:
     _HAS_TORCHVISION_NMS = False
 
 # ---------- CONFIG ----------
-VIDEO_PATH = r"video_2025-09-13_23-50-36.mp4"
-YOLO_WEIGHTS = "yolov8m.pt"   # change if necessary
+VIDEO_PATH = r"D:\pytorch_projects+tensorflow_projects_3.12\TL_FLAGSHIP\TL_MAIN_GATE\cctv footage videos\Students footages\MAIN GATE_INGATE PEDESTRAIN_20250902075201_20250902075801.mp4"
+YOLO_WEIGHTS = "yolov8m.pt"
 CONF_THRESH = 0.35
 IOU_NMS = 0.8
 
 # Counting line/area
 LINE_CENTER_Y = 600
-LINE_ANGLE_DEG_ANTICLOCKWISE = 20
+LINE_ANGLE_DEG_ANTICLOCKWISE = 0
 LINE_ANGLE_RAD = math.radians(LINE_ANGLE_DEG_ANTICLOCKWISE)
 BAND_HALF_WIDTH_PX = 100  # thickness (perpendicular half-width)
+
+# ONE-DIRECTION COUNTING
+#  1 => count crossings from -1 -> +1 (entering)
+# -1 => count crossings from +1 -> -1 (exiting)
+COUNT_ONLY_DIRECTION = 1
+
+# Position-based thresholds (we use signed distance to line)
+MIN_START_DIST_FRAC = 0.35   # how far (fraction of band half-width) a track must be to be considered "clearly on origin side"
+MID_THRESHOLD_FRAC = 0.0     # midpoint = crossing center line (0). Set >0 to require further movement.
+FAR_THRESHOLD_FRAC = 0.5     # optional: require reaching at least this fraction of band half-width on target side
 
 # HUMAN CLASS
 HUMAN_CLASSES = {"person"}
 
 # Stability & duplicate protection
-MIN_FRAMES_BEFORE_COUNT = 2    # stable frames seen before counting logic
-MIN_FRAMES_IN_BAND = 2        # consecutive frames inside band required to count
+MIN_FRAMES_BEFORE_COUNT = 1
+MIN_FRAMES_IN_BAND = 1
 DUP_RADIUS_PX = 80
 DUP_FRAME_WINDOW = 100
 
 # Overlap thresholds (tweak)
-MIN_OVERLAP_PIX = 50          # minimal number of pixels overlap to consider "in-band"
-MIN_OVERLAP_RATIO = 0.01      # or >1% of bbox area overlapping
+MIN_OVERLAP_PIX = 30
+MIN_OVERLAP_RATIO = 0.005
 
 # Appearance-based duplicate suppression (HSV histogram)
-HIST_BINS = (16, 8)              # hue, sat bins
-HIST_RANGE = [0, 180, 0, 256]    # ranges for H and S
-HIST_SIM_THRESH = 0.62           # correlation threshold for "same person" (tune)
-COUNTED_SIGNATURE_MAX_AGE = DUP_FRAME_WINDOW  # frames to keep signatures
+HIST_BINS = (16, 8)
+HIST_RANGE = [0, 180, 0, 256]
+HIST_SIM_THRESH = 0.78
+COUNTED_SIGNATURE_MAX_AGE = DUP_FRAME_WINDOW
 
 # DeepSORT params
 DEEPSORT_MAX_AGE = 30
+
+# Debugging
+DEBUG = True   # set False to hide per-track reject reasons
 
 # ---------- HELPERS ----------
 def class_agnostic_nms(boxes, scores, iou_thresh=0.5):
@@ -75,15 +89,9 @@ def class_agnostic_nms(boxes, scores, iou_thresh=0.5):
     return keep
 
 def point_in_poly(poly_pts, x, y):
-    # poly_pts: Nx2 int32 numpy array
     return cv2.pointPolygonTest(poly_pts, (float(x), float(y)), False) >= 0
 
 def compute_hsv_hist(img, bbox, bins=HIST_BINS):
-    """
-    img: BGR frame
-    bbox: (l, t, r, b)
-    returns flattened normalized histogram (float32) or None if invalid crop
-    """
     l, t, r, b = bbox
     l = max(0, l); t = max(0, t); r = min(img.shape[1]-1, r); b = min(img.shape[0]-1, b)
     w = r - l; h = b - t
@@ -100,15 +108,12 @@ def compute_hsv_hist(img, bbox, bins=HIST_BINS):
     cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
     return hist.flatten().astype(np.float32)
 
-# (kept your side_of_line helper in case desired later)
-def side_of_line(p1x, p1y, p2x, p2y, px, py):
+def signed_distance_to_line(p1x, p1y, p2x, p2y, px, py):
+    lx = p2x - p1x
+    ly = p2y - p1y
+    line_len = math.hypot(lx, ly) if (lx != 0 or ly != 0) else 1.0
     cross = (p2x - p1x) * (py - p1y) - (p2y - p1y) * (px - p1x)
-    if cross > 0:
-        return 1
-    elif cross < 0:
-        return -1
-    else:
-        return 0
+    return cross / line_len
 
 # ---------- INITIALIZE ----------
 model = YOLO(YOLO_WEIGHTS)
@@ -117,15 +122,28 @@ tracker = DeepSort(max_age=DEEPSORT_MAX_AGE)
 cap = cv2.VideoCapture(VIDEO_PATH)
 
 human_counts = {h: 0 for h in HUMAN_CLASSES}
-counted_ids = set()                  # prevents double-count with same active track id
+counted_ids = set()
 prev_centers = {}
 prev_in_band = {}
 inband_consec_counts = {}
 track_frame_counts = {}
 track_label_history = defaultdict(Counter)
-counted_events = []                  # (label, cx, cy, frame_idx) for spatial duplicate fallback
-counted_signatures = []              # list of dicts: {'hist', 'last_frame', 'pos'}
+counted_events = deque()  # keep as deque to prune efficiently
+counted_signatures = []
 frame_idx = 0
+
+# Per-track crossing / first-signed state
+first_signed = {}         # track_id -> signed distance when first seen
+prev_signed_dist = {}     # track_id -> last signed distance
+max_abs_pre_cross = {}    # track_id -> max abs signed dist before crossing
+
+# Derived constants
+origin_side_needed = -1 if COUNT_ONLY_DIRECTION == 1 else 1
+target_side = 1 if COUNT_ONLY_DIRECTION == 1 else -1
+min_start_dist = BAND_HALF_WIDTH_PX * MIN_START_DIST_FRAC
+mid_threshold = BAND_HALF_WIDTH_PX * MID_THRESHOLD_FRAC
+far_threshold = BAND_HALF_WIDTH_PX * FAR_THRESHOLD_FRAC
+tolerance = BAND_HALF_WIDTH_PX * 1.5  # tolerance used for "near center" checks
 
 # ---------- MAIN LOOP ----------
 while True:
@@ -135,7 +153,7 @@ while True:
     frame_idx += 1
     fh, fw = frame.shape[:2]
 
-    # compute angled center line endpoints
+    # compute line endpoints & normal
     center_x = fw // 2
     center_y = LINE_CENTER_Y
     line_length = int(max(fw, fh) * 1.6)
@@ -144,7 +162,6 @@ while True:
     x1_line = int(center_x - dx); y1_line = int(center_y - dy)
     x2_line = int(center_x + dx); y2_line = int(center_y + dy)
 
-    # compute normal for band polygon offsets
     lx = x2_line - x1_line; ly = y2_line - y1_line
     line_len = math.hypot(lx, ly) if (lx != 0 or ly != 0) else 1.0
     nx = -ly / line_len; ny = lx / line_len
@@ -197,19 +214,21 @@ while True:
             w_box = x2 - x1; h_box = y2 - y1
             detections_for_tracker.append([[int(x1), int(y1), int(w_box), int(h_box)], float(scores_np[i]), str(labels_np[i])])
 
-    tracks = tracker.update_tracks(detections_for_tracker, frame=frame)
+    try:
+        tracks = tracker.update_tracks(detections_for_tracker, frame=frame)
+    except Exception:
+        tracks = []
 
-    # Draw band (semi-transparent) and boundaries
+    # Draw band overlay and info
     overlay = frame.copy()
     cv2.fillPoly(overlay, [band_pts], (0, 0, 128))
-    alpha = 0.15
-    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    cv2.addWeighted(overlay, 0.12, frame, 1 - 0.12, 0, frame)
     p1a = (x1_line - off_x, y1_line - off_y); p2a = (x2_line - off_x, y2_line - off_y)
     p1b = (x1_line + off_x, y1_line + off_y); p2b = (x2_line + off_x, y2_line + off_y)
     cv2.line(frame, p1a, p2a, (0, 0, 255), 2); cv2.line(frame, p1b, p2b, (0, 0, 255), 2)
     cv2.line(frame, (x1_line, y1_line), (x2_line, y2_line), (0, 0, 180), 1)
-    cv2.putText(frame, f"{LINE_ANGLE_DEG_ANTICLOCKWISE}deg, band_half={BAND_HALF_WIDTH_PX}px",
-                (10, fh - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,200), 2)
+    cv2.putText(frame, f"{LINE_ANGLE_DEG_ANTICLOCKWISE}deg band_half={BAND_HALF_WIDTH_PX}px dir={'Enter' if COUNT_ONLY_DIRECTION==1 else 'Exit'}",
+                (10, fh - 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200,200,200), 2)
 
     # Process confirmed tracks
     for track in tracks:
@@ -227,7 +246,7 @@ while True:
         if track_id == -1:
             continue
 
-        # bbox LTRB (track.to_ltrb may be tuple/list)
+        # bbox LTRB
         try:
             l, t, r, b = map(int, track.to_ltrb())
         except Exception:
@@ -237,8 +256,9 @@ while True:
             except Exception:
                 continue
 
+        # center and bottom points
         cx = int((l + r) / 2); cy = int((t + b) / 2)
-        px = int((l + r) / 2); py = int(b)  # bottom-center (feet)
+        bottom_x = cx; bottom_y = b
 
         # label voting
         det_label = None
@@ -257,21 +277,19 @@ while True:
             label = track_label_history[track_id].most_common(1)[0][0] if track_label_history[track_id] else None
 
         # draw bbox + id + label
-        txt = f"{label}-{track_id}" if label else f"id-{track_id}"
         cv2.rectangle(frame, (l, t), (r, b), (0,200,0), 2)
+        txt = f"{label}-{track_id}" if label else f"id-{track_id}"
         cv2.putText(frame, txt, (l, max(12, t-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 2)
         cv2.circle(frame, (cx, cy), 3, (255, 0, 0), -1)
-        cv2.circle(frame, (px, py), 3, (0, 255, 255), -1)
+        cv2.circle(frame, (bottom_x, bottom_y), 3, (0, 255, 255), -1)
 
         # update frames seen
         track_frame_counts[track_id] = track_frame_counts.get(track_id, 0) + 1
         frames_seen = track_frame_counts[track_id]
 
-        # Check multiple in-band criteria:
-        bottom_in = point_in_poly(band_pts, px, py)
+        # band membership tests (use bottom and center + overlap)
+        bottom_in = point_in_poly(band_pts, bottom_x, bottom_y)
         center_in = point_in_poly(band_pts, cx, cy)
-
-        # bbox overlap with band (pixel mask)
         bbox_w = max(1, r - l); bbox_h = max(1, b - t)
         bbox_area = bbox_w * bbox_h
         bbox_mask = np.zeros((fh, fw), dtype=np.uint8)
@@ -280,83 +298,134 @@ while True:
         overlap_pixels = int(cv2.countNonZero(overlap))
         overlap_ratio = overlap_pixels / (bbox_area + 1e-8)
         overlap_in = (overlap_pixels >= MIN_OVERLAP_PIX) or (overlap_ratio >= MIN_OVERLAP_RATIO)
-
-        # final in-band decision
         curr_in_band = bottom_in or center_in or overlap_in
 
-        # track consecutive frames inside
+        # consecutive frames inside
         if curr_in_band:
             inband_consec_counts[track_id] = inband_consec_counts.get(track_id, 0) + 1
         else:
             inband_consec_counts[track_id] = 0
 
-        # Decide to count: require stable presence inside band
+        # compute signed distance & side using center (more stable)
+        curr_signed = signed_distance_to_line(x1_line, y1_line, x2_line, y2_line, cx, cy)
+        curr_side = 1 if curr_signed > 0 else (-1 if curr_signed < 0 else 0)
+
+        # initialize first_signed if needed
+        if track_id not in first_signed:
+            first_signed[track_id] = curr_signed
+            max_abs_pre_cross[track_id] = abs(curr_signed)
+        else:
+            # update max absolute distance before crossing (useful for gating) when sign hasn't flipped
+            prev_s = prev_signed_dist.get(track_id, None)
+            if prev_s is None or (np.sign(curr_signed) == np.sign(prev_s)):
+                max_abs_pre_cross[track_id] = max(max_abs_pre_cross.get(track_id, 0.0), abs(curr_signed))
+
+        # gating (improved / corrected)
         should_count_now = False
+        reject_reason = None
+
         if (inband_consec_counts.get(track_id, 0) >= MIN_FRAMES_IN_BAND
             and frames_seen >= MIN_FRAMES_BEFORE_COUNT
             and label in human_counts
             and track_id not in counted_ids):
-            should_count_now = True
 
+            fs = first_signed.get(track_id, 0.0)
+            prev_signed = prev_signed_dist.get(track_id, None)
+
+            # determine whether track clearly started on the expected origin side
+            if origin_side_needed == -1:
+                origin_ok = (fs <= -min_start_dist)
+            else:
+                origin_ok = (fs >= min_start_dist)
+
+            # Primary test: clearly started on origin side AND current center reached midpoint/far threshold on target side
+            if origin_ok and (curr_signed * target_side >= mid_threshold):
+                should_count_now = True
+            else:
+                # Secondary: sign flip detection with previous on origin and current at/over midpoint on target side
+                if prev_signed is not None:
+                    # consider prev_on_origin true if previous was on origin side (strong) or far enough on origin side
+                    prev_on_origin = (prev_signed * origin_side_needed > 0) or (prev_signed * origin_side_needed <= -min_start_dist)
+                    # strict sign flip: product < 0 -> opposite signs
+                    if (prev_signed * curr_signed < 0) and prev_on_origin and (curr_signed * target_side >= mid_threshold):
+                        should_count_now = True
+                    else:
+                        reject_reason = f"not_reached_mid fs={fs:.1f} prev={prev_signed:.1f} curr={curr_signed:.1f}"
+                else:
+                    reject_reason = f"started_inside fs={fs:.1f} curr={curr_signed:.1f}"
+
+        else:
+            if label not in human_counts:
+                reject_reason = "label_not_human"
+            elif track_id in counted_ids:
+                reject_reason = "already_counted"
+            else:
+                reject_reason = "gating_frames_or_band"
+
+        # duplicate checks and final register
         if should_count_now:
-            # compute appearance signature for this track
             sig_hist = compute_hsv_hist(frame, (l, t, r, b), bins=HIST_BINS)
-
-            # Appearance + spatio-temporal duplicate check
             is_dup = False
             if sig_hist is not None and len(counted_signatures) > 0:
                 for sig in counted_signatures:
-                    # skip old signatures
                     if (frame_idx - sig['last_frame']) > COUNTED_SIGNATURE_MAX_AGE:
                         continue
                     sx, sy = sig['pos']
                     dx = sx - cx; dy = sy - cy
-                    # quick spatial skip if very far (relaxed)
+                    # allow a bit larger radius check (squared)
                     if dx*dx + dy*dy > (DUP_RADIUS_PX * DUP_RADIUS_PX * 9):
                         continue
-                    # histogram similarity (correlation)
                     try:
                         sim = float(cv2.compareHist(sig['hist'].astype(np.float32), sig_hist.astype(np.float32), cv2.HISTCMP_CORREL))
                     except Exception:
                         sim = -1.0
                     if sim >= HIST_SIM_THRESH:
                         is_dup = True
-                        # refresh signature meta
                         sig['last_frame'] = frame_idx
                         sig['pos'] = (cx, cy)
+                        reject_reason = f"dup_hist_sim={sim:.2f}"
                         break
 
-            # fallback spatial/time duplicate check if no hist match
             if not is_dup:
-                for ev in counted_events:
+                # spatial/time-based duplication against recent counted_events
+                for ev in list(counted_events):
                     ev_label, ev_cx, ev_cy, ev_frame = ev
                     if ev_label == label and (frame_idx - ev_frame) <= DUP_FRAME_WINDOW:
-                        dx_e = cx - ev_cx
-                        dy_e = cy - ev_cy
+                        dx_e = cx - ev_cx; dy_e = cy - ev_cy
                         if dx_e*dx_e + dy_e*dy_e <= DUP_RADIUS_PX * DUP_RADIUS_PX:
                             is_dup = True
+                            reject_reason = "dup_spatial"
                             break
 
             if not is_dup:
-                # Count and register
                 human_counts[label] += 1
                 counted_ids.add(track_id)
                 counted_events.append((label, cx, cy, frame_idx))
+                # trim oldest events beyond window
+                while counted_events and (frame_idx - counted_events[0][3]) > DUP_FRAME_WINDOW:
+                    counted_events.popleft()
                 cv2.putText(frame, f"COUNTED {label}", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-
-                # store signature if available
                 if sig_hist is not None:
                     counted_signatures.append({'hist': sig_hist, 'last_frame': frame_idx, 'pos': (cx, cy)})
 
-            # cleanup old signatures (trim list)
+            # clean counted_signatures by age
             counted_signatures = [s for s in counted_signatures if (frame_idx - s['last_frame']) <= COUNTED_SIGNATURE_MAX_AGE]
 
-        prev_in_band[track_id] = curr_in_band
-        prev_centers[track_id] = (cx, cy)
+        # Debug overlay: why rejected (if DEBUG)
+        if DEBUG and reject_reason:
+            cv2.putText(frame, reject_reason, (max(0, l-4), min(fh-10, b+36)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 128, 255), 1)
 
-    # prune old counted_events
+        # Optional debug print for offline trace
+        if DEBUG:
+            prev_signed_str = f"{prev_signed_dist[track_id]:.1f}" if track_id in prev_signed_dist and prev_signed_dist[track_id] is not None else "None"
+            print(f"F{frame_idx} id{track_id} label={label} fs={first_signed.get(track_id,0.0):.1f} prev={prev_signed_str} curr={curr_signed:.1f} origin_ok={('Y' if ('origin_ok' in locals() and origin_ok) else 'N')} inband={int(curr_in_band)} frames={frames_seen} should_count={should_count_now} rej={reject_reason}")
+
+        # Update prev signed
+        prev_signed_dist[track_id] = curr_signed
+
+    # prune old counted_events (already done when appending, but keep safe)
     while counted_events and (frame_idx - counted_events[0][3]) > DUP_FRAME_WINDOW:
-        counted_events.pop(0)
+        counted_events.popleft()
 
     # display counts
     y_offset = 30
@@ -364,7 +433,7 @@ while True:
         cv2.putText(frame, f"{hlabel}: {c}", (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
         y_offset += 30
 
-    cv2.imshow("Human Counter - Area + Appearance Suppression", frame)
+    cv2.imshow("One-way Position-based Counter (fixed)", frame)
     if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
