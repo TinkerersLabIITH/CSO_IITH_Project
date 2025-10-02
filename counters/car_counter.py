@@ -27,6 +27,14 @@ class CarCounter(BaseCounter):
         super().__init__(config, detector, tracker)
         self.track_history = defaultdict(list)
         self.polyline_np = np.array(self.config.COUNTING_POLYLINE, dtype=np.int32)
+        self.log_file = getattr(self.config, "LOG_FILE", "events.log")
+
+    def log_event(self, event_type):
+        import datetime, json
+        ts = datetime.datetime.utcnow().isoformat() + "Z"
+        log_entry = {"ts": ts, "event": "entry", "type": event_type}
+        with open(self.log_file, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
 
     def process_frame(self, frame):
         """
@@ -63,6 +71,7 @@ class CarCounter(BaseCounter):
                         if tid not in self.counted_ids:
                             self.counts[track.det_class] += 1
                             self.counted_ids.add(tid)
+                            self.log_event(track.det_class)
                         break
         return tracks
 
