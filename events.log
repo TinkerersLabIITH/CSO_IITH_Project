@@ -1432,4 +1432,4 @@
 {"ts": "2025-10-05T19:40:16.000000Z", "event": "entry", "type": "truck"}
 {"ts": "2025-10-05T19:19:48.000000Z", "event": "exit", "type": "person"}
 {"ts": "2025-10-05T19:05:34.000000Z", "event": "entry", "type": "person"}
-{"ts": "2025-10-05T19:58:57.000000Z", "event": "exit", "type": "truck"}{"ts":"2025-10-05T19:00:00.000Z","event":"entry","type":"person"}
+{"ts": "2025-10-05T19:58:57.000000Z", "event": "exit", "type": "truck"}

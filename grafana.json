@@ -1,0 +1,177 @@
+{
+  "id": null,
+  "title": "Campus Security Dashboard",
+  "uid": "campus-security-split",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "🧍 Persons Entered",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"entry\" | type=\"person\"[1d]))",
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "loki" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "stat",
+      "title": "🧍 Persons Exited",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"exit\" | type=\"person\"[1d]))",
+          "refId": "B",
+          "datasource": { "type": "loki", "uid": "loki" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "stat",
+      "title": "🧍 Persons Inside",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"entry\" | type=\"person\"[1d]))",
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "loki" }
+        },
+        {
+          "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"exit\" | type=\"person\"[1d]))",
+          "refId": "B",
+          "datasource": { "type": "loki", "uid": "loki" }
+        }
+      ],
+      "transformations": [
+        {
+          "id": "binary",
+          "options": {
+            "mode": "subtract",
+            "left": "A",
+            "right": "B"
+          }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "stat",
+      "title": "🚗 Cars Entered",
+      "gridPos": { "x": 0, "y": 4, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"entry\" | type=\"car\"[1d]))",
+          "refId": "C",
+          "datasource": { "type": "loki", "uid": "loki" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "stat",
+      "title": "🚗 Cars Exited",
+      "gridPos": { "x": 6, "y": 4, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"exit\" | type=\"car\"[1d]))",
+          "refId": "D",
+          "datasource": { "type": "loki", "uid": "loki" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "stat",
+      "title": "🚗 Cars Inside",
+      "gridPos": { "x": 12, "y": 4, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"entry\" | type=\"car\"[1d]))", "refId": "C", "datasource": { "type": "loki", "uid": "loki" } },
+        { "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"exit\" | type=\"car\"[1d]))", "refId": "D", "datasource": { "type": "loki", "uid": "loki" } }
+      ],
+      "transformations": [
+        { "id": "binary", "options": { "mode": "subtract", "left": "C", "right": "D" } }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "stat",
+      "title": "🚚 Trucks Entered",
+      "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"entry\" | type=\"truck\"[1d]))", "refId": "E", "datasource": { "type": "loki", "uid": "loki" } }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "stat",
+      "title": "🚚 Trucks Exited",
+      "gridPos": { "x": 6, "y": 8, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"exit\" | type=\"truck\"[1d]))", "refId": "F", "datasource": { "type": "loki", "uid": "loki" } }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "stat",
+      "title": "🚚 Trucks Inside",
+      "gridPos": { "x": 12, "y": 8, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"entry\" | type=\"truck\"[1d]))", "refId": "E", "datasource": { "type": "loki", "uid": "loki" } },
+        { "expr": "sum(count_over_time({job=\"people_counter\"} | json | event=\"exit\" | type=\"truck\"[1d]))", "refId": "F", "datasource": { "type": "loki", "uid": "loki" } }
+      ],
+      "transformations": [
+        { "id": "binary", "options": { "mode": "subtract", "left": "E", "right": "F" } }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "options": { "reduceOptions": { "calcs": ["last"] } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Entries vs Exits Over Time",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 6 },
+      "targets": [
+        { "expr": "count_over_time({job=\"people_counter\"} | json | event=\"entry\"[5m])", "refId": "A", "legendFormat": "Entries", "datasource": { "type": "loki", "uid": "loki" } },
+        { "expr": "count_over_time({job=\"people_counter\"} | json | event=\"exit\"[5m])", "refId": "B", "legendFormat": "Exits", "datasource": { "type": "loki", "uid": "loki" } }
+      ]
+    },
+    {
+      "type": "heatmap",
+      "title": "Peak Entry Hours",
+      "gridPos": { "x": 0, "y": 18, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "count_over_time({job=\"people_counter\"} | json | event=\"entry\"[1h])", "refId": "A", "datasource": { "type": "loki", "uid": "loki" } }
+      ]
+    },
+    {
+      "type": "piechart",
+      "title": "Entity Distribution",
+      "gridPos": { "x": 12, "y": 18, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "sum by (type) (count_over_time({job=\"people_counter\"} | json | event=\"entry\"[1d]))", "refId": "A", "datasource": { "type": "loki", "uid": "loki" } }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Live Entry/Exit Logs",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+      "targets": [
+        { "expr": "{job=\"people_counter\"} | json", "refId": "A", "datasource": { "type": "loki", "uid": "loki" } }
+      ]
+    }
+  ]
+}
+
