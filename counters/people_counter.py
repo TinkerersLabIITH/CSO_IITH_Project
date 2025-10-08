@@ -166,12 +166,13 @@ class PeopleCounter(BaseCounter): # <-- CORRECTLY INHERITS FROM BaseCounter
         with open(self.log_file, "a") as f:
             f.write(json.dumps(log_entry) + "\n")
 
-    def process_frame(self, frame):
+    def process_frame(self, frame, return_events=False):
         """
         This method overrides the one in BaseCounter.
         It contains the main detection, tracking, and counting logic.
+        If return_events=True, returns (tracks, [event_dict, ...]) for thread-safe logging.
         """
-        # 1. Detection and Tracking
+        import datetime
         results = self.detector(frame, conf=self.config.CONF_THRESH, verbose=False)
         detections_for_tracker = []
         for r in results:
@@ -184,7 +185,7 @@ class PeopleCounter(BaseCounter): # <-- CORRECTLY INHERITS FROM BaseCounter
         
         tracks = self.tracker.update_tracks(detections_for_tracker, frame=frame)
 
-        # 2. Process Tracks and Check for Crossing
+        events = []
         for track in tracks:
             if not track.is_confirmed(): continue
 
@@ -202,9 +203,15 @@ class PeopleCounter(BaseCounter): # <-- CORRECTLY INHERITS FROM BaseCounter
                         if tid not in self.counted_ids:
                             self.counts["person"] += 1
                             self.counted_ids.add(tid)
-                            self.log_event("person")
+                            if return_events:
+                                ts = datetime.datetime.utcnow().isoformat() + "Z"
+                                events.append({"ts": ts, "event": "entry", "type": "person"})
+                            else:
+                                self.log_event("person")
                         break
-        return tracks # Return tracks to be used by draw_overlay
+        if return_events:
+            return tracks, events
+        return tracks
 
     def draw_overlay(self, frame, tracks):
         """

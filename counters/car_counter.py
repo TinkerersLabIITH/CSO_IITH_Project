@@ -36,10 +36,12 @@ class CarCounter(BaseCounter):
         with open(self.log_file, "a") as f:
             f.write(json.dumps(log_entry) + "\n")
 
-    def process_frame(self, frame):
+    def process_frame(self, frame, return_events=False):
         """
         Overrides BaseCounter's method to process a frame for cars.
+        If return_events=True, returns (tracks, [event_dict, ...]) for thread-safe logging.
         """
+        import datetime
         results = self.detector(frame, conf=self.config.CONF_THRESH, verbose=False)
         detections_for_tracker = []
         for r in results:
@@ -54,6 +56,7 @@ class CarCounter(BaseCounter):
         
         tracks = self.tracker.update_tracks(detections_for_tracker, frame=frame)
 
+        events = []
         for track in tracks:
             if not track.is_confirmed() or track.det_class not in self.config.TARGET_CLASSES:
                 continue
@@ -71,8 +74,14 @@ class CarCounter(BaseCounter):
                         if tid not in self.counted_ids:
                             self.counts[track.det_class] += 1
                             self.counted_ids.add(tid)
-                            self.log_event(track.det_class)
+                            if return_events:
+                                ts = datetime.datetime.utcnow().isoformat() + "Z"
+                                events.append({"ts": ts, "event": "entry", "type": track.det_class})
+                            else:
+                                self.log_event(track.det_class)
                         break
+        if return_events:
+            return tracks, events
         return tracks
 
     def draw_overlay(self, frame, tracks):
